@@ -22,81 +22,12 @@ except ImportError:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def headers_to_extvlcopt(headers):
-    """Converte un dizionario di header in una lista di stringhe #EXTVLCOPT per VLC."""
-    vlc_opts = []
-    for key, value in headers.items():
-        # VLC usa nomi di header in minuscolo
-        vlc_opts.append(f'#EXTVLCOPT:http-{key.lower()}={value}')
-    return vlc_opts
+    """Funzione mantenuta per compatibilità, ma non più utilizzata attivamente."""
+    return []
 
 def search_m3u8_in_sites(channel_id, is_tennis=False, session=None):
-    """
-    Cerca i file .m3u8 nei siti specificati per i canali daddy e tennis
-    """
-    # Se non viene passata una sessione, ne crea una temporanea
-    if session is None:
-        session = requests.Session()
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-        "X-Requested-With": "XMLHttpRequest",
-        "X-Forwarded-For": "127.0.0.1",
-        # Il Referer viene impostato dinamicamente
-        "Referer": "https://ava.karmakurama.com/"
-    }
-
-    # Logica per canali TENNIS con ID specifico (es. 15xx)
-    if is_tennis and len(str(channel_id)) == 4 and str(channel_id).startswith('15'):
-        tennis_suffix = str(channel_id)[2:]  # Prende le ultime due cifre
-        folder_name = f"wikiten{tennis_suffix}"
-        base_url = "https://ava.karmakurama.com/wikihz/"
-        test_url = f"{base_url}{folder_name}/mono.m3u8"
-        current_headers = headers.copy()
-        current_headers["Referer"] = base_url # Aggiorna il referer per i canali tennis
-        
-        try:
-            response = session.head(test_url, timeout=5, headers=current_headers)
-            if response.status_code == 200:
-                print(f"[✓] Stream tennis trovato: {test_url}")
-                return test_url
-        except requests.exceptions.RequestException as e:
-            print(f"[!] Errore durante il test di {test_url}: {e}")
-    # Logica per tutti gli altri canali DADDY (inclusi quelli "tennis" senza ID specifico)
-    else: 
-        # Per i canali daddy, cerca nei siti specificati
-        daddy_sites = [
-            "https://ava.karmakurama.com/wind/",
-            "https://ava.karmakurama.com/ddy6/", 
-            "https://ava.karmakurama.com/zeko/",
-            "https://ava.karmakurama.com/nfs/",
-            "https://ava.karmakurama.com/dokko1/"
-        ]
-        folder_name = f"premium{channel_id}"
-
-        def check_url(site):
-            url = f"{site}{folder_name}/mono.m3u8"
-            req_headers = headers.copy()
-            req_headers["Referer"] = site
-            try:
-                response = session.head(url, timeout=5, headers=req_headers)
-                if response.status_code == 200:
-                    return url
-            except requests.exceptions.RequestException:
-                # Gli errori di connessione sono normali, non li stampiamo per non affollare il log
-                pass
-            return None
-
-        # Esegue le richieste in parallelo e restituisce il primo risultato valido
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(daddy_sites)) as executor:
-            future_to_url = {executor.submit(check_url, site): site for site in daddy_sites}
-            for future in concurrent.futures.as_completed(future_to_url):
-                result = future.result()
-                if result:
-                    print(f"[✓] Stream daddy trovato: {result}")
-                    return result
-    
-    # Se la ricerca fallisce, non stampare nulla qui, verrà gestito dal chiamante
-    return None
+    """Genera direttamente l'URL di dlhd.dad per il channel_id fornito."""
+    return f"https://dlhd.dad/watch.php?id={channel_id}"
 
 def dlhd():
     """
@@ -119,38 +50,52 @@ def dlhd():
         cleaned = re.sub(r'[^a-zA-Z0-9À-ÿ]', '', tvg_id)
         return cleaned.lower()
 
-    def get_stream_from_channel_id(channel_id):
-        return f"https://dlhd.dad/watch.php?id={channel_id}"
-
     # ========== ESTRAZIONE CANALI 24/7 ==========
-    print("Estraendo canali 24/7...")
-    json_url = "https://dlhd.dad/daddy.json"
-    session = requests.Session() # Crea una sessione per riutilizzare le connessioni
+    print("Estraendo canali 24/7 dalla pagina HTML...")
+    html_url = "https://dlhd.dad/24-7-channels.php"
+    session = requests.Session()
 
     try:
-        response = requests.get(json_url, headers=HEADERS, timeout=15, verify=False)
+        response = requests.get(html_url, headers=HEADERS, timeout=15, verify=False)
         response.raise_for_status()
-        data = response.json()
+        
+        # Parsa l'HTML con BeautifulSoup
+        soup = BeautifulSoup(response.text, 'html.parser')
+        cards = soup.find_all('a', class_='card')
+        
+        print(f"Trovati {len(cards)} canali nella pagina HTML")
  
         channels_247 = []
  
-        for channel in data:
-            name = channel.get("channel_name")
-            channel_id = channel.get("channel_id")
+        for card in cards:
+            # Estrae il nome del canale
+            title_div = card.find('div', class_='card__title')
+            if not title_div:
+                continue
+            
+            name = title_div.text.strip()
+            
+            # Estrae l'ID del canale dall'href
+            href = card.get('href', '')
+            if not ('id=' in href):
+                continue
+            
+            channel_id = href.split('id=')[1].split('&')[0]
+            
             if not name or not channel_id:
                 continue
- 
+
+            # Applicazione delle correzioni come prima
             if name == "Sky Calcio 7 (257) Italy":
                 name = "DAZN"
             if channel_id == "853":
                 name = "Canale 5 Italy"
             
-            # Cerca prima lo stream .m3u8
+            # Cerca lo stream .m3u8
             stream_url = search_m3u8_in_sites(channel_id, is_tennis="tennis" in name.lower(), session=session)
             
-            if stream_url:
+            if stream_url: # La funzione ora restituisce sempre un URL
                 channels_247.append((name, stream_url))
-
 
         # Conta le occorrenze di ogni nome di canale
         name_counts = {}
@@ -166,6 +111,7 @@ def dlhd():
                 if name not in name_counter:
                     # Prima occorrenza di un duplicato, mantieni il nome originale
                     name_counter[name] = 1
+                    final_channels.append((name, stream_url))
                 else:
                     # Occorrenze successive, aggiungi contatore
                     name_counter[name] += 1
@@ -290,22 +236,12 @@ def dlhd():
 
             for name, url in live_events:
                 f.write(f'#EXTINF:-1 group-title="Live Events",{name}\n')
-                if "ava.karmakurama.com" in url and not url.endswith('.php'):
-                    daddy_headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", "Referrer": "https://ava.karmakurama.com/", "Origin": "https://ava.karmakurama.com"}
-                    vlc_opt_lines = headers_to_extvlcopt(daddy_headers)
-                    for line in vlc_opt_lines:
-                        f.write(f'{line}\n')
                 f.write(f'{url}\n\n')
 
         # Aggiungi canali 24/7
         if channels_247:
             for name, url in channels_247:
                 f.write(f'#EXTINF:-1 group-title="DLHD 24/7",{name}\n')
-                if "ava.karmakurama.com" in url and not url.endswith('.php'):
-                    daddy_headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", "Referrer": "https://ava.karmakurama.com/", "Origin": "https://ava.karmakurama.com"}
-                    vlc_opt_lines = headers_to_extvlcopt(daddy_headers)
-                    for line in vlc_opt_lines:
-                        f.write(f'{line}\n')
                 f.write(f'{url}\n\n')
 
     total_channels = len(channels_247) + len(live_events)
